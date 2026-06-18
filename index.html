@@ -124,19 +124,23 @@
 <script>
 document.getElementById('ws-date').textContent = new Date().toLocaleDateString('it-IT',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 
-// Prova Google DoH, fallback su Cloudflare — entrambi hanno CORS aperto su domini esterni
+// Prova più endpoint DoH pubblici in sequenza — fallback automatico
 async function dnsQuery(name, type) {
+  const q = `name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
   const endpoints = [
-    `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`,
-    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`
+    `https://cloudflare-dns.com/dns-query?${q}`,
+    `https://dns.google/resolve?${q}`,
+    `https://doh.li/dns-query?${q}`,
+    `https://dns.quad9.net/dns-query?${q}`
   ];
+  let lastErr = null;
   for (const url of endpoints) {
     try {
       const r = await fetch(url, { headers: { Accept: 'application/dns-json' } });
       if (r.ok) return r.json();
-    } catch(e) {}
+    } catch(e) { lastErr = e; }
   }
-  throw new Error('Tutti i resolver DNS non raggiungibili');
+  throw new Error('Nessun resolver DNS raggiungibile. Controlla la connessione o le impostazioni di rete.');
 }
 
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}

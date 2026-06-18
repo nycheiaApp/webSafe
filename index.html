@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>webSafe — OSINT Security Scanner</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     :root{
@@ -112,6 +113,9 @@
   <div id="ws-results" class="ws-results">
     <div id="ws-error" class="ws-error"></div>
     <div class="ws-cards" id="ws-cards"></div>
+    <div id="ws-pdf-btn-wrap" style="display:none;margin-bottom:1.2rem">
+      <button class="ws-btn" id="pdf-btn" onclick="downloadPDF()" style="background:var(--ink2);font-size:12px;padding:9px;letter-spacing:.1em">↓ Scarica risultati PDF</button>
+    </div>
     <div id="ws-details"></div>
   </div>
 
@@ -200,7 +204,7 @@ function toggleSection(id){
   const open=body.classList.toggle('open');
   if(arrow)arrow.classList.toggle('open',open);
 }
-function addSection(container,id,status,name,badge,detail){
+function addSection(container,id,status,name,badge,detail,_store){
   let el=document.getElementById('sec-'+id);
   if(!el){el=document.createElement('div');el.id='sec-'+id;container.appendChild(el);}
   el.className='ws-section '+status;
@@ -210,6 +214,7 @@ function addSection(container,id,status,name,badge,detail){
     <div class="ws-section-toggle" id="arrow-${id}">▼</div>
   </div>
   <div class="ws-section-body" id="body-${id}">${detail}</div>`;
+  if(_store) _store.push({status,name,badge,detail});
 }
 function buildCard(gaugeId,kicker,verdict,sub,score,color,checks){
   const card=document.createElement('div');
@@ -235,6 +240,8 @@ async function startScan(){
   document.getElementById('scan-btn').textContent='Scansione in corso...';
   document.getElementById('ws-results').style.display='block';
   document.getElementById('ws-cards').innerHTML='';
+  _scanSummary={domain:targetDomain,email:email,dSections:[],eSections:[]};
+  const dS=_scanSummary.dSections; const eS=_scanSummary.eSections;
   document.getElementById('ws-details').innerHTML='';
 
   const domainFromEmail=email?email.split('@')[1]:null;
@@ -249,53 +256,53 @@ async function startScan(){
     det.appendChild(dLabel);
 
     try{const aRes=await dnsQuery(targetDomain,'A');const aRecs=(aRes.Answer||[]).filter(r=>r.type===1);
-      if(aRecs.length>0){addSection(det,'dns','ok','Record DNS — Il dominio risponde','risolto','Il dominio risponde agli IP: <code>'+escHtml(aRecs.map(r=>r.data).join(', '))+'</code>');dChecks.push({name:'DNS',score:100,color:'#2A6B3A'});dPoints+=10;dTotal+=10;}
-      else{addSection(det,'dns','warn','Record DNS — Nessun server web','no ip','Nessun record A trovato. Il dominio potrebbe non avere un sito attivo.');dChecks.push({name:'DNS',score:0,color:'#A05C10'});dTotal+=10;}
-    }catch(e){addSection(det,'dns','fail','Record DNS — Errore','errore',escHtml(e.message));dChecks.push({name:'DNS',score:0,color:'#B83220'});dTotal+=10;}
+      if(aRecs.length>0){addSection(det,'dns','ok','Record DNS — Il dominio risponde','risolto','Il dominio risponde agli IP: <code>'+escHtml(aRecs.map(r=>r.data,dS).join(', '))+'</code>');dChecks.push({name:'DNS',score:100,color:'#2A6B3A'});dPoints+=10;dTotal+=10;}
+      else{addSection(det,'dns','warn','Record DNS — Nessun server web','no ip','Nessun record A trovato. Il dominio potrebbe non avere un sito attivo.',dS);dChecks.push({name:'DNS',score:0,color:'#A05C10'});dTotal+=10;}
+    }catch(e){addSection(det,'dns','fail','Record DNS — Errore','errore',escHtml(e.message,dS));dChecks.push({name:'DNS',score:0,color:'#B83220'});dTotal+=10;}
 
     try{const mxRes=await dnsQuery(targetDomain,'MX');const mxRecs=(mxRes.Answer||[]).filter(r=>r.type===15);
-      if(mxRecs.length>0){addSection(det,'mx','ok','Server email — Configurato','trovato','Server email attivo: <code>'+escHtml(mxRecs.map(r=>r.data).join(', '))+'</code>');dChecks.push({name:'Email server',score:100,color:'#2A6B3A'});dPoints+=8;dTotal+=8;}
-      else{addSection(det,'mx','warn','Server email — Non configurato','assente','Nessun server email per questo dominio.');dChecks.push({name:'Email server',score:0,color:'#A05C10'});dTotal+=8;}
-    }catch(e){addSection(det,'mx','fail','Server email — Errore','errore','Errore.');dChecks.push({name:'Email server',score:0,color:'#B83220'});dTotal+=8;}
+      if(mxRecs.length>0){addSection(det,'mx','ok','Server email — Configurato','trovato','Server email attivo: <code>'+escHtml(mxRecs.map(r=>r.data,dS).join(', '))+'</code>');dChecks.push({name:'Email server',score:100,color:'#2A6B3A'});dPoints+=8;dTotal+=8;}
+      else{addSection(det,'mx','warn','Server email — Non configurato','assente','Nessun server email per questo dominio.',dS);dChecks.push({name:'Email server',score:0,color:'#A05C10'});dTotal+=8;}
+    }catch(e){addSection(det,'mx','fail','Server email — Errore','errore','Errore.',dS);dChecks.push({name:'Email server',score:0,color:'#B83220'});dTotal+=8;}
 
     try{const spfRes=await dnsQuery(targetDomain,'TXT');const spf=(spfRes.Answer||[]).filter(r=>r.type===16).map(r=>r.data.replace(/"/g,'')).find(t=>t.startsWith('v=spf1'));
       if(spf){const strong=spf.includes('-all'),mild=spf.includes('~all');
-        if(strong){addSection(det,'spf','ok','Anti-spoofing (SPF) — Protezione forte','sicuro','Solo server autorizzati possono inviare email a tuo nome.<br><code>'+escHtml(spf.substring(0,120))+'</code>');dChecks.push({name:'Anti-spoofing',score:100,color:'#2A6B3A'});dPoints+=15;dTotal+=15;}
-        else if(mild){addSection(det,'spf','warn','Anti-spoofing (SPF) — Protezione parziale','soft','Email non autorizzate marcate ma non bloccate. Considera <code>-all</code>.<br><code>'+escHtml(spf.substring(0,120))+'</code>');dChecks.push({name:'Anti-spoofing',score:55,color:'#A05C10'});dPoints+=8;dTotal+=15;}
-        else{addSection(det,'spf','warn','Anti-spoofing (SPF) — Policy permissiva','permissivo','Chiunque può inviare email a tuo nome.');dChecks.push({name:'Anti-spoofing',score:20,color:'#B83220'});dTotal+=15;}
-      }else{addSection(det,'spf','fail','Anti-spoofing (SPF) — Non configurato','mancante','Chiunque può spacciarsi per <code>'+escHtml(targetDomain)+'</code>. Rischio phishing e truffe.');dChecks.push({name:'Anti-spoofing',score:0,color:'#B83220'});dTotal+=15;}
-    }catch(e){addSection(det,'spf','fail','Anti-spoofing (SPF) — Errore','errore','Errore.');dChecks.push({name:'Anti-spoofing',score:0,color:'#B83220'});dTotal+=15;}
+        if(strong){addSection(det,'spf','ok','Anti-spoofing (SPF,dS) — Protezione forte','sicuro','Solo server autorizzati possono inviare email a tuo nome.<br><code>'+escHtml(spf.substring(0,120))+'</code>');dChecks.push({name:'Anti-spoofing',score:100,color:'#2A6B3A'});dPoints+=15;dTotal+=15;}
+        else if(mild){addSection(det,'spf','warn','Anti-spoofing (SPF,dS) — Protezione parziale','soft','Email non autorizzate marcate ma non bloccate. Considera <code>-all</code>.<br><code>'+escHtml(spf.substring(0,120))+'</code>');dChecks.push({name:'Anti-spoofing',score:55,color:'#A05C10'});dPoints+=8;dTotal+=15;}
+        else{addSection(det,'spf','warn','Anti-spoofing (SPF,dS) — Policy permissiva','permissivo','Chiunque può inviare email a tuo nome.');dChecks.push({name:'Anti-spoofing',score:20,color:'#B83220'});dTotal+=15;}
+      }else{addSection(det,'spf','fail','Anti-spoofing (SPF,dS) — Non configurato','mancante','Chiunque può spacciarsi per <code>'+escHtml(targetDomain)+'</code>. Rischio phishing e truffe.');dChecks.push({name:'Anti-spoofing',score:0,color:'#B83220'});dTotal+=15;}
+    }catch(e){addSection(det,'spf','fail','Anti-spoofing (SPF,dS) — Errore','errore','Errore.');dChecks.push({name:'Anti-spoofing',score:0,color:'#B83220'});dTotal+=15;}
 
     try{const dmarcRes=await dnsQuery('_dmarc.'+targetDomain,'TXT');const dmarc=(dmarcRes.Answer||[]).filter(r=>r.type===16).map(r=>r.data.replace(/"/g,'')).find(t=>t.startsWith('v=DMARC1'));
       if(dmarc){const pm=dmarc.match(/p=(none|quarantine|reject)/);const policy=pm?pm[1]:'none';
-        if(policy==='reject'){addSection(det,'dmarc','ok','Anti-phishing (DMARC) — Protezione massima','reject','Email fraudolente rifiutate automaticamente.<br><code>'+escHtml(dmarc.substring(0,120))+'</code>');dChecks.push({name:'Anti-phishing',score:100,color:'#2A6B3A'});dPoints+=15;dTotal+=15;}
-        else if(policy==='quarantine'){addSection(det,'dmarc','warn','Anti-phishing (DMARC) — Protezione media','quarantine','Email sospette in spam. Considera <code>p=reject</code>.<br><code>'+escHtml(dmarc.substring(0,120))+'</code>');dChecks.push({name:'Anti-phishing',score:55,color:'#A05C10'});dPoints+=8;dTotal+=15;}
-        else{addSection(det,'dmarc','fail','Anti-phishing (DMARC) — Solo monitoraggio','none','Policy <code>p=none</code>: nessuna azione contro email fraudolente.');dChecks.push({name:'Anti-phishing',score:15,color:'#B83220'});dPoints+=3;dTotal+=15;}
-      }else{addSection(det,'dmarc','fail','Anti-phishing (DMARC) — Non configurato','mancante','Chiunque può fare phishing usando il tuo dominio.');dChecks.push({name:'Anti-phishing',score:0,color:'#B83220'});dTotal+=15;}
-    }catch(e){addSection(det,'dmarc','fail','Anti-phishing (DMARC) — Errore','errore','Errore.');dChecks.push({name:'Anti-phishing',score:0,color:'#B83220'});dTotal+=15;}
+        if(policy==='reject'){addSection(det,'dmarc','ok','Anti-phishing (DMARC,dS) — Protezione massima','reject','Email fraudolente rifiutate automaticamente.<br><code>'+escHtml(dmarc.substring(0,120))+'</code>');dChecks.push({name:'Anti-phishing',score:100,color:'#2A6B3A'});dPoints+=15;dTotal+=15;}
+        else if(policy==='quarantine'){addSection(det,'dmarc','warn','Anti-phishing (DMARC,dS) — Protezione media','quarantine','Email sospette in spam. Considera <code>p=reject</code>.<br><code>'+escHtml(dmarc.substring(0,120))+'</code>');dChecks.push({name:'Anti-phishing',score:55,color:'#A05C10'});dPoints+=8;dTotal+=15;}
+        else{addSection(det,'dmarc','fail','Anti-phishing (DMARC,dS) — Solo monitoraggio','none','Policy <code>p=none</code>: nessuna azione contro email fraudolente.');dChecks.push({name:'Anti-phishing',score:15,color:'#B83220'});dPoints+=3;dTotal+=15;}
+      }else{addSection(det,'dmarc','fail','Anti-phishing (DMARC,dS) — Non configurato','mancante','Chiunque può fare phishing usando il tuo dominio.');dChecks.push({name:'Anti-phishing',score:0,color:'#B83220'});dTotal+=15;}
+    }catch(e){addSection(det,'dmarc','fail','Anti-phishing (DMARC,dS) — Errore','errore','Errore.');dChecks.push({name:'Anti-phishing',score:0,color:'#B83220'});dTotal+=15;}
 
     try{const sels=['default','google','selector1','selector2','mail','dkim','k1','s1','s2','key1','smtp'];let found=null;
       for(const s of sels){try{const r=await dnsQuery(s+'._domainkey.'+targetDomain,'TXT');const t=(r.Answer||[]).filter(x=>x.type===16).map(x=>x.data.replace(/"/g,'')).find(x=>x.includes('v=DKIM1'));if(t){found=s;break;}}catch(e){}}
-      if(found){addSection(det,'dkim','ok','Firma digitale email (DKIM) — Attiva','trovato','Firma digitale verificabile. Selector: <code>'+escHtml(found)+'</code>');dChecks.push({name:'Firma digitale',score:100,color:'#2A6B3A'});dPoints+=12;dTotal+=12;}
-      else{addSection(det,'dkim','warn','Firma digitale email (DKIM) — Non rilevata','non trovato','Nessuna firma trovata nei selector comuni.');dChecks.push({name:'Firma digitale',score:0,color:'#A05C10'});dTotal+=12;}
-    }catch(e){addSection(det,'dkim','fail','Firma digitale (DKIM) — Errore','errore','Errore.');dChecks.push({name:'Firma digitale',score:0,color:'#B83220'});dTotal+=12;}
+      if(found){addSection(det,'dkim','ok','Firma digitale email (DKIM,dS) — Attiva','trovato','Firma digitale verificabile. Selector: <code>'+escHtml(found)+'</code>');dChecks.push({name:'Firma digitale',score:100,color:'#2A6B3A'});dPoints+=12;dTotal+=12;}
+      else{addSection(det,'dkim','warn','Firma digitale email (DKIM,dS) — Non rilevata','non trovato','Nessuna firma trovata nei selector comuni.');dChecks.push({name:'Firma digitale',score:0,color:'#A05C10'});dTotal+=12;}
+    }catch(e){addSection(det,'dkim','fail','Firma digitale (DKIM,dS) — Errore','errore','Errore.');dChecks.push({name:'Firma digitale',score:0,color:'#B83220'});dTotal+=12;}
 
     try{const nsRes=await dnsQuery(targetDomain,'NS');const nsRecs=(nsRes.Answer||[]).filter(r=>r.type===2);
-      if(nsRecs.length>=2){addSection(det,'ns','ok','Ridondanza DNS — Nameserver multipli','ridondante',nsRecs.length+' nameserver: <code>'+escHtml(nsRecs.map(r=>r.data).join(', '))+'</code>');dChecks.push({name:'Ridondanza',score:100,color:'#2A6B3A'});dPoints+=8;dTotal+=8;}
-      else if(nsRecs.length===1){addSection(det,'ns','warn','Ridondanza DNS — Un solo server','singolo','Un solo nameserver. Se va offline il dominio smette di funzionare.');dChecks.push({name:'Ridondanza',score:40,color:'#A05C10'});dPoints+=4;dTotal+=8;}
-      else{addSection(det,'ns','fail','Ridondanza DNS — Nessun nameserver','mancante','Nessun nameserver trovato.');dChecks.push({name:'Ridondanza',score:0,color:'#B83220'});dTotal+=8;}
-    }catch(e){addSection(det,'ns','fail','Ridondanza DNS — Errore','errore','Errore.');dChecks.push({name:'Ridondanza',score:0,color:'#B83220'});dTotal+=8;}
+      if(nsRecs.length>=2){addSection(det,'ns','ok','Ridondanza DNS — Nameserver multipli','ridondante',nsRecs.length+' nameserver: <code>'+escHtml(nsRecs.map(r=>r.data,dS).join(', '))+'</code>');dChecks.push({name:'Ridondanza',score:100,color:'#2A6B3A'});dPoints+=8;dTotal+=8;}
+      else if(nsRecs.length===1){addSection(det,'ns','warn','Ridondanza DNS — Un solo server','singolo','Un solo nameserver. Se va offline il dominio smette di funzionare.',dS);dChecks.push({name:'Ridondanza',score:40,color:'#A05C10'});dPoints+=4;dTotal+=8;}
+      else{addSection(det,'ns','fail','Ridondanza DNS — Nessun nameserver','mancante','Nessun nameserver trovato.',dS);dChecks.push({name:'Ridondanza',score:0,color:'#B83220'});dTotal+=8;}
+    }catch(e){addSection(det,'ns','fail','Ridondanza DNS — Errore','errore','Errore.',dS);dChecks.push({name:'Ridondanza',score:0,color:'#B83220'});dTotal+=8;}
 
     try{const ds=await dnsQuery(targetDomain,'DS');const dk=await dnsQuery(targetDomain,'DNSKEY');
       const ok=(ds.Answer||[]).some(r=>r.type===43)||(dk.Answer||[]).some(r=>r.type===48);
-      if(ok){addSection(det,'dnssec','ok','Protezione DNS (DNSSEC) — Attiva','attivo','DNS firmato crittograficamente. Protezione contro DNS spoofing e cache poisoning.');dChecks.push({name:'Protezione DNS',score:100,color:'#2A6B3A'});dPoints+=10;dTotal+=10;}
-      else{addSection(det,'dnssec','warn','Protezione DNS (DNSSEC) — Non attiva','inattivo','Senza DNSSEC un attaccante può reindirizzare i tuoi utenti verso siti falsi.');dChecks.push({name:'Protezione DNS',score:0,color:'#A05C10'});dTotal+=10;}
-    }catch(e){addSection(det,'dnssec','fail','Protezione DNS — Errore','errore','Errore.');dChecks.push({name:'Protezione DNS',score:0,color:'#B83220'});dTotal+=10;}
+      if(ok){addSection(det,'dnssec','ok','Protezione DNS (DNSSEC,dS) — Attiva','attivo','DNS firmato crittograficamente. Protezione contro DNS spoofing e cache poisoning.');dChecks.push({name:'Protezione DNS',score:100,color:'#2A6B3A'});dPoints+=10;dTotal+=10;}
+      else{addSection(det,'dnssec','warn','Protezione DNS (DNSSEC,dS) — Non attiva','inattivo','Senza DNSSEC un attaccante può reindirizzare i tuoi utenti verso siti falsi.');dChecks.push({name:'Protezione DNS',score:0,color:'#A05C10'});dTotal+=10;}
+    }catch(e){addSection(det,'dnssec','fail','Protezione DNS — Errore','errore','Errore.',dS);dChecks.push({name:'Protezione DNS',score:0,color:'#B83220'});dTotal+=10;}
 
     try{const caaRes=await dnsQuery(targetDomain,'CAA');const caa=(caaRes.Answer||[]).filter(r=>r.type===257);
-      if(caa.length>0){addSection(det,'caa','ok','Controllo certificati SSL (CAA) — Configurato','configurato','CA autorizzate: <code>'+escHtml(caa.map(r=>r.data).join(' | ').substring(0,150))+'</code>');dChecks.push({name:'Certif. SSL',score:100,color:'#2A6B3A'});dPoints+=7;dTotal+=7;}
-      else{addSection(det,'caa','warn','Controllo certificati SSL (CAA) — Non configurato','assente','Qualsiasi CA può emettere certificati SSL per il tuo dominio.');dChecks.push({name:'Certif. SSL',score:0,color:'#A05C10'});dTotal+=7;}
-    }catch(e){addSection(det,'caa','warn','Controllo certificati SSL — N/A','n/a','Impossibile verificare.');dChecks.push({name:'Certif. SSL',score:0,color:'#A05C10'});dTotal+=7;}
+      if(caa.length>0){addSection(det,'caa','ok','Controllo certificati SSL (CAA,dS) — Configurato','configurato','CA autorizzate: <code>'+escHtml(caa.map(r=>r.data).join(' | ').substring(0,150))+'</code>');dChecks.push({name:'Certif. SSL',score:100,color:'#2A6B3A'});dPoints+=7;dTotal+=7;}
+      else{addSection(det,'caa','warn','Controllo certificati SSL (CAA,dS) — Non configurato','assente','Qualsiasi CA può emettere certificati SSL per il tuo dominio.');dChecks.push({name:'Certif. SSL',score:0,color:'#A05C10'});dTotal+=7;}
+    }catch(e){addSection(det,'caa','warn','Controllo certificati SSL — N/A','n/a','Impossibile verificare.',dS);dChecks.push({name:'Certif. SSL',score:0,color:'#A05C10'});dTotal+=7;}
   }
 
   if(email){
@@ -303,7 +310,7 @@ async function startScan(){
     const eLabel=document.createElement('div');eLabel.className='ws-panel-title';eLabel.style.marginTop='1.5rem';eLabel.textContent='— Dettagli · Email';det.appendChild(eLabel);
 
     const fmt=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);const alias=/[+\.]/.test(email.split('@')[0]);
-    addSection(det,'efmt',fmt?'ok':'fail','Formato email — '+(fmt?'Valido':'Non valido'),fmt?'valido':'invalido',fmt?(alias?'Formato corretto. Possibile alias con <code>+</code> o <code>.</code>.':'Formato corretto e standard.'):'Formato non valido.');
+    addSection(det,'efmt',fmt?'ok':'fail','Formato email — '+(fmt?'Valido':'Non valido',eS),fmt?'valido':'invalido',fmt?(alias?'Formato corretto. Possibile alias con <code>+</code> o <code>.</code>.':'Formato corretto e standard.'):'Formato non valido.');
     eChecks.push({name:'Formato',score:fmt?100:0,color:fmt?'#2A6B3A':'#B83220'});
     if(fmt){ePoints+=5;eTotal+=5;}else eTotal+=5;
 
@@ -312,37 +319,42 @@ async function startScan(){
         if(mxd.includes('google')||mxd.includes('gmail'))prov=' <strong>(Google Workspace)</strong>';
         else if(mxd.includes('outlook')||mxd.includes('microsoft'))prov=' <strong>(Microsoft 365)</strong>';
         else if(mxd.includes('protonmail')||mxd.includes('proton'))prov=' <strong>(ProtonMail)</strong>';
-        addSection(det,'emx','ok','Dominio email — Riceve messaggi','attivo','Server email attivo'+prov+': <code>'+escHtml(mxd)+'</code>');
+        addSection(det,'emx','ok','Dominio email — Riceve messaggi','attivo','Server email attivo'+prov+': <code>'+escHtml(mxd,eS)+'</code>');
         eChecks.push({name:'Dominio attivo',score:100,color:'#2A6B3A'});ePoints+=8;eTotal+=8;
-      }else{addSection(det,'emx','fail','Dominio email — Non riceve messaggi','no mx','Nessun server email. L\'indirizzo probabilmente non esiste.');eChecks.push({name:'Dominio attivo',score:0,color:'#B83220'});eTotal+=8;}
-    }catch(e){addSection(det,'emx','fail','Dominio email — Errore','errore','Errore.');eChecks.push({name:'Dominio attivo',score:0,color:'#B83220'});eTotal+=8;}
+      }else{addSection(det,'emx','fail','Dominio email — Non riceve messaggi','no mx','Nessun server email. L\'indirizzo probabilmente non esiste.',eS);eChecks.push({name:'Dominio attivo',score:0,color:'#B83220'});eTotal+=8;}
+    }catch(e){addSection(det,'emx','fail','Dominio email — Errore','errore','Errore.',eS);eChecks.push({name:'Dominio attivo',score:0,color:'#B83220'});eTotal+=8;}
 
     const disp=['mailinator.com','guerrillamail.com','temp-mail.org','10minutemail.com','throwam.com','yopmail.com','sharklasers.com','trashmail.com','mailnull.com','trashmail.me','dispostable.com','fakeinbox.com','maildrop.cc','tempmail.org','getnada.com','tempr.email','discard.email','spam4.me','mailsac.com','throwaway.email','mintemail.com','tempemail.net','guerrillamailblock.com','grr.la'];
     const isDisp=disp.includes(ed.toLowerCase());
-    addSection(det,'edisp',isDisp?'fail':'ok','Email temporanea — '+(isDisp?'Rilevata':'Non rilevata'),isDisp?'rilevata':'no rischio',
+    addSection(det,'edisp',isDisp?'fail':'ok','Email temporanea — '+(isDisp?'Rilevata':'Non rilevata',eS),isDisp?'rilevata':'no rischio',
       isDisp?'<code>'+escHtml(ed)+'</code> è un servizio usa e getta. Questi indirizzi durano ore o minuti.'
             :'<code>'+escHtml(ed)+'</code> non risulta tra i provider di email temporanee noti.');
     eChecks.push({name:'Non temporanea',score:isDisp?0:100,color:isDisp?'#B83220':'#2A6B3A'});
     if(!isDisp){ePoints+=10;eTotal+=10;}else eTotal+=10;
 
-    addSection(det,'ehibp','warn','Violazioni dati (HIBP) — Non disponibile','api key','<i>Have I Been Pwned</i> controlla se questa email è apparsa in database trafugati. Richiede chiave API (~3.50$/mese). <a href="https://haveibeenpwned.com/API/Key" target="_blank">Richiedila qui</a>.');
+    addSection(det,'ehibp','warn','Violazioni dati (HIBP,eS) — Non disponibile','api key','<i>Have I Been Pwned</i> controlla se questa email è apparsa in database trafugati. Richiede chiave API (~3.50$/mese). <a href="https://haveibeenpwned.com/API/Key" target="_blank">Richiedila qui</a>.');
     eChecks.push({name:'Data breach',score:50,color:'#A05C10'});eTotal+=15;
 
     try{const known=['gmail.com','yahoo.com','yahoo.it','hotmail.com','hotmail.it','outlook.com','icloud.com','protonmail.com','proton.me','libero.it','virgilio.it','tiscali.it','tin.it','alice.it','me.com','mac.com','live.com','live.it','fastmail.com','tutanota.com','tuta.io','zoho.com','aol.com'];
       if(known.includes(ed.toLowerCase())){
-        addSection(det,'eprov','ok','Provider email — Affidabile','affidabile','<code>'+escHtml(ed)+'</code> è un provider consolidato e ampiamente riconosciuto.');
+        addSection(det,'eprov','ok','Provider email — Affidabile','affidabile','<code>'+escHtml(ed,eS)+'</code> è un provider consolidato e ampiamente riconosciuto.');
         eChecks.push({name:'Provider',score:100,color:'#2A6B3A'});ePoints+=7;eTotal+=7;
       }else{const a=await dnsQuery(ed,'A');const active=(a.Answer||[]).some(r=>r.type===1);
-        if(active){addSection(det,'eprov','warn','Provider email — Dominio personalizzato','personalizzato','<code>'+escHtml(ed)+'</code> è un dominio personalizzato. Non necessariamente problematico.');eChecks.push({name:'Provider',score:60,color:'#A05C10'});ePoints+=4;eTotal+=7;}
-        else{addSection(det,'eprov','fail','Provider email — Dominio non attivo','inattivo','<code>'+escHtml(ed)+'</code> non risulta attivo. Segnale di allarme.');eChecks.push({name:'Provider',score:0,color:'#B83220'});eTotal+=7;}
+        if(active){addSection(det,'eprov','warn','Provider email — Dominio personalizzato','personalizzato','<code>'+escHtml(ed,eS)+'</code> è un dominio personalizzato. Non necessariamente problematico.');eChecks.push({name:'Provider',score:60,color:'#A05C10'});ePoints+=4;eTotal+=7;}
+        else{addSection(det,'eprov','fail','Provider email — Dominio non attivo','inattivo','<code>'+escHtml(ed,eS)+'</code> non risulta attivo. Segnale di allarme.');eChecks.push({name:'Provider',score:0,color:'#B83220'});eTotal+=7;}
       }
-    }catch(e){addSection(det,'eprov','warn','Provider — N/A','n/a','Impossibile analizzare.');eChecks.push({name:'Provider',score:50,color:'#A05C10'});eTotal+=7;}
+    }catch(e){addSection(det,'eprov','warn','Provider — N/A','n/a','Impossibile analizzare.',eS);eChecks.push({name:'Provider',score:50,color:'#A05C10'});eTotal+=7;}
   }
 
   const cardsEl=document.getElementById('ws-cards');cardsEl.innerHTML='';
-  if(targetDomain){const ds=dTotal>0?Math.round((dPoints/dTotal)*100):0;const dc=colorForScore(ds);const dv=verdictDomain(ds);cardsEl.appendChild(buildCard('gauge-d','Dominio · '+targetDomain,dv.v,dv.sub,ds,dc,dChecks));setTimeout(()=>animateGauge('gauge-d',ds,dc),60);}
-  if(email){const es=eTotal>0?Math.round((ePoints/eTotal)*100):0;const ec=colorForScore(es);const ev=verdictEmail(es);cardsEl.appendChild(buildCard('gauge-e','Email · '+email,ev.v,ev.sub,es,ec,eChecks));setTimeout(()=>animateGauge('gauge-e',es,ec),60);}
+  if(targetDomain){const ds=dTotal>0?Math.round((dPoints/dTotal)*100):0;const dc=colorForScore(ds);const dv=verdictDomain(ds);
+    _scanSummary.dScore=ds;_scanSummary.dVerdict=dv.v;_scanSummary.dSub=dv.sub;
+    cardsEl.appendChild(buildCard('gauge-d','Dominio · '+targetDomain,dv.v,dv.sub,ds,dc,dChecks));setTimeout(()=>animateGauge('gauge-d',ds,dc),60);}
+  if(email){const es=eTotal>0?Math.round((ePoints/eTotal)*100):0;const ec=colorForScore(es);const ev=verdictEmail(es);
+    _scanSummary.eScore=es;_scanSummary.eVerdict=ev.v;_scanSummary.eSub=ev.sub;
+    cardsEl.appendChild(buildCard('gauge-e','Email · '+email,ev.v,ev.sub,es,ec,eChecks));setTimeout(()=>animateGauge('gauge-e',es,ec),60);}
   setTimeout(animateBars,160);
+  document.getElementById('ws-pdf-btn-wrap').style.display='block';
   document.getElementById('scan-btn').disabled=false;
   document.getElementById('scan-btn').textContent='Nuova scansione →';
 }
@@ -350,6 +362,177 @@ async function startScan(){
 function showErr(msg){const el=document.getElementById('ws-error');el.textContent=msg;el.style.display='block';document.getElementById('ws-results').style.display='block';}
 document.getElementById('inp-domain').addEventListener('keydown',e=>{if(e.key==='Enter')startScan();});
 document.getElementById('inp-email').addEventListener('keydown',e=>{if(e.key==='Enter')startScan();});
+
+// ---- GENERA PDF ----
+let _scanSummary = {};
+
+function downloadPDF() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const W = 210, margin = 16, contentW = W - margin * 2;
+  let y = 0;
+
+  const INK    = [26, 23, 19];
+  const INK3   = [107, 99, 85];
+  const CREAM2 = [237, 232, 220];
+  const GREEN  = [42, 107, 58];
+  const AMBER  = [160, 92, 16];
+  const RED    = [184, 50, 32];
+  const RULE   = [200, 191, 176];
+
+  function checkY(needed) {
+    if (y + needed > 275) { doc.addPage(); y = 16; }
+  }
+
+  // Header
+  doc.setFillColor(...INK);
+  doc.rect(0, 0, W, 18, 'F');
+  doc.setTextColor(237, 232, 220);
+  doc.setFontSize(18); doc.setFont('helvetica','bold');
+  doc.text('webSafe', margin, 12);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.text('OSINT Security Scanner', margin + 35, 12);
+  doc.text(new Date().toLocaleDateString('it-IT',{weekday:'long',year:'numeric',month:'long',day:'numeric'}), W - margin, 12, {align:'right'});
+  y = 26;
+
+  // Intro
+  doc.setTextColor(...INK3);
+  doc.setFontSize(8);
+  doc.text('Analisi eseguita nel browser · Dati pubblici · Nessun tracciamento', margin, y);
+  y += 8;
+
+  // Funzione blocco sezione
+  function drawSection(status, name, badge, detail) {
+    const color = status==='ok' ? GREEN : status==='warn' ? AMBER : RED;
+    const symbol = status==='ok' ? '✓' : status==='warn' ? '!' : '✕';
+    checkY(18);
+
+    // sfondo
+    doc.setFillColor(...CREAM2);
+    doc.rect(margin, y, contentW, 12, 'F');
+    doc.setDrawColor(...RULE);
+    doc.rect(margin, y, contentW, 12, 'S');
+
+    // indicatore colore laterale
+    doc.setFillColor(...color);
+    doc.rect(margin, y, 3, 12, 'F');
+
+    // simbolo
+    doc.setTextColor(...color);
+    doc.setFontSize(9); doc.setFont('helvetica','bold');
+    doc.text(symbol, margin + 6, y + 7.5);
+
+    // nome
+    doc.setTextColor(...INK);
+    doc.setFontSize(8.5); doc.setFont('helvetica','bold');
+    doc.text(name, margin + 13, y + 5);
+
+    // badge
+    doc.setTextColor(...color);
+    doc.setFontSize(7); doc.setFont('helvetica','normal');
+    doc.text(badge.toUpperCase(), W - margin - 2, y + 5, {align:'right'});
+
+    // detail
+    doc.setTextColor(...INK3);
+    doc.setFontSize(7.5); doc.setFont('helvetica','normal');
+    const cleanDetail = detail.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+    const lines = doc.splitTextToSize(cleanDetail, contentW - 16);
+    const detH = lines.length * 4.5 + 3;
+    checkY(detH + 1);
+    doc.text(lines, margin + 13, y + 10);
+    y += 12 + detH + 2;
+  }
+
+  // Score cards
+  function drawScoreCard(x, w, kicker, verdict, sub, score) {
+    const color = score>=70 ? GREEN : score>=40 ? AMBER : RED;
+    const label = score>=80?'Ottimo':score>=60?'Discreto':score>=40?'Insufficiente':'Critico';
+    doc.setFillColor(...CREAM2);
+    doc.rect(x, y, w, 36, 'F');
+    doc.setDrawColor(...RULE);
+    doc.rect(x, y, w, 36, 'S');
+
+    doc.setTextColor(...INK3);
+    doc.setFontSize(7); doc.setFont('helvetica','normal');
+    doc.text(('— '+kicker).toUpperCase(), x+4, y+5);
+
+    doc.setTextColor(...INK);
+    doc.setFontSize(9); doc.setFont('helvetica','bold');
+    const vLines = doc.splitTextToSize(verdict, w-8);
+    doc.text(vLines, x+4, y+10);
+
+    doc.setTextColor(...INK3);
+    doc.setFontSize(7); doc.setFont('helvetica','normal');
+    const sLines = doc.splitTextToSize(sub, w-8);
+    doc.text(sLines, x+4, y+18);
+
+    // score numerico grande
+    doc.setTextColor(...color);
+    doc.setFontSize(22); doc.setFont('helvetica','bold');
+    doc.text(String(score), x + w - 18, y + 28);
+
+    // barra
+    doc.setFillColor(...RULE);
+    doc.rect(x+4, y+30, w-22, 3, 'F');
+    doc.setFillColor(...color);
+    doc.rect(x+4, y+30, (w-22)*(score/100), 3, 'F');
+
+    doc.setTextColor(...color);
+    doc.setFontSize(7);
+    doc.text(label+' · '+score+'/100', x+4, y+36);
+  }
+
+  // Titolo sezione dominio
+  if (_scanSummary.domain) {
+    // score card dominio
+    const dScore = _scanSummary.dScore || 0;
+    const dVerdict = _scanSummary.dVerdict || '';
+    const dSub = _scanSummary.dSub || '';
+    drawScoreCard(margin, contentW, 'Dominio · '+_scanSummary.domain, dVerdict, dSub, dScore);
+    y += 42;
+
+    doc.setDrawColor(...RULE);
+    doc.line(margin, y, W-margin, y); y+=5;
+    doc.setTextColor(...INK3);
+    doc.setFontSize(8); doc.setFont('helvetica','bold');
+    doc.text('DETTAGLI · DOMINIO', margin, y); y+=5;
+
+    (_scanSummary.dSections||[]).forEach(s => drawSection(s.status, s.name, s.badge, s.detail));
+    y += 4;
+  }
+
+  if (_scanSummary.email) {
+    checkY(42);
+    const eScore = _scanSummary.eScore || 0;
+    const eVerdict = _scanSummary.eVerdict || '';
+    const eSub = _scanSummary.eSub || '';
+    drawScoreCard(margin, contentW, 'Email · '+_scanSummary.email, eVerdict, eSub, eScore);
+    y += 42;
+
+    doc.setDrawColor(...RULE);
+    doc.line(margin, y, W-margin, y); y+=5;
+    doc.setTextColor(...INK3);
+    doc.setFontSize(8); doc.setFont('helvetica','bold');
+    doc.text('DETTAGLI · EMAIL', margin, y); y+=5;
+
+    (_scanSummary.eSections||[]).forEach(s => drawSection(s.status, s.name, s.badge, s.detail));
+  }
+
+  // Footer su ogni pagina
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i=1; i<=totalPages; i++) {
+    doc.setPage(i);
+    doc.setFillColor(...INK);
+    doc.rect(0, 287, W, 10, 'F');
+    doc.setTextColor(200,191,176);
+    doc.setFontSize(7); doc.setFont('helvetica','normal');
+    doc.text('webSafe · Analisi OSINT · Tutti i controlli eseguiti nel browser', margin, 293);
+    doc.text('Pagina '+i+' di '+totalPages, W-margin, 293, {align:'right'});
+  }
+
+  const fname = 'websafe-report-'+(_scanSummary.domain||_scanSummary.email||'scan').replace(/[^a-z0-9]/gi,'-')+'.pdf';
+  doc.save(fname);
+}
 </script>
 </body>
 </html>
